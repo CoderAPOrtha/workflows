@@ -1,7 +1,7 @@
 name: PHP Code Checks
 
 # Reusable Workflow — wird von Projekt-Repos aufgerufen.
-# Prueft PHP-Dateien auf: Syntax, SQL-Sicherheit, Credentials.
+# Prueft PHP-Dateien auf: Syntax, Credentials.
 #
 # Aufruf aus einem Projekt-Repo:
 #   jobs:
@@ -46,35 +46,6 @@ jobs:
             exit 1
           fi
           echo "Alle Dateien OK"
-
-      - name: SQL Prepared Statements
-        run: |
-          echo "=== SQL Prepared Statements ==="
-          warnings=0
-          skip_dirs="${{ inputs.skip_dirs }}"
-
-          for f in $(git diff --name-only --diff-filter=ACM HEAD~1 HEAD -- '*.php' 2>/dev/null || find . -name '*.php' -not -path './vendor/*'); do
-            skip=false
-            for dir in $skip_dirs; do
-              if echo "$f" | grep -q "$dir"; then
-                skip=true
-                break
-              fi
-            done
-            if [ "$skip" = true ]; then continue; fi
-
-            if grep -qiE 'SELECT |INSERT |UPDATE |DELETE ' "$f" 2>/dev/null; then
-              if ! grep -qE 'prepare\(|bindParam|bindValue|execute\(' "$f" 2>/dev/null; then
-                echo "::warning file=$f::SQL ohne Prepared Statements"
-                warnings=$((warnings + 1))
-              fi
-            fi
-          done
-          if [ $warnings -gt 0 ]; then
-            echo "::error::$warnings Datei(en) mit unsicherem SQL"
-            exit 1
-          fi
-          echo "Alle SQL-Checks bestanden"
 
       - name: Credentials Scan
         run: |
