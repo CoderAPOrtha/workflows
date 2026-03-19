@@ -1,0 +1,156 @@
+name: PHP Code Checks
+
+# Reusable Workflow — wird von Projekt-Repos aufgerufen.
+# Prueft PHP-Dateien auf: Syntax, Auth-Guards, SQL-Sicherheit, Credentials.
+#
+# Aufruf aus einem Projekt-Repo:
+#   jobs:
+#     checks:
+#       uses: CoderAPOrtha/workflows/.github/workflows/php-checks.yml@main
+
+on:
+  workflow_call:
+    inputs:
+      skip_dirs:
+        type: string
+        default: 'config/ includes/ helpers/ vendor/ setup/'
+        description: 'Verzeichnisse die beim Pattern-Check uebersprungen werden (Space-getrennt)'
+      php_version:
+        type: string
+        default: '8.2'
+        description: 'PHP-Version fuer Syntax-Check'
+      extra_auth_patterns:
+        type: string
+        default: ''
+        description: 'Zusaetzliche Auth-Patterns fuer Projekte ohne Standard-Auth (Pipe-getrennt, z.B. requireAuth|requireAdmin)'
+
+jobs:
+  php-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ inputs.php_version }}
+
+      - name: Syntax Check
+        run: |
+          echo "=== PHP Syntax Check ==="
+          errors=0
+          for f in $(git diff --name-only --diff-filter=ACM HEAD~1 HEAD -- '*.php' 2>/dev/null || find . -name '*.php' -not -path './vendor/*'); do
+            if ! php -l "$f" 2>&1 | grep -q "No syntax errors"; then
+              echo "FAIL: $f"
+              php -l "$f"
+              errors=$((errors + 1))
+            fi
+          done
+          if [ $errors -gt 0 ]; then
+            echo "::error::$errors Datei(en) mit Syntax-Fehlern"
+            exit 1
+          fi
+          echo "Alle Dateien OK"
+
+      - name: Auth Check
+        run: |
+          echo "=== Auth Check ==="
+          warnings=0
+          skip_dirs="${{ inputs.skip_dirs }}"
+          # Standard-Auth-Guards
+          auth_pattern='require_login|require_role|require_api_auth|require_csrf'
+          # Zusaetzliche Patterns (fuer Projekte ohne Standard-Auth)
+          extra="${{ inputs.extra_auth_patterns }}"
+          if [ -n "$extra" ]; then
+            auth_pattern="${auth_pattern}|${extra}"
+          fi
+
+          for f in $(git diff --name-only --diff-filter=ACM HEAD~1 HEAD -- '*.php' 2>/dev/null || find . -name '*.php' -not -path './vendor/*'); do
+            skip=false
+            for dir in $skip_dirs; do
+              if echo "$f" | grep -q "$dir"; then
+                skip=true
+                break
+              fi
+            done
+            if [ "$skip" = true ]; then continue; fi
+
+            if ! grep -qE "$auth_pattern" "$f" 2>/dev/null; then
+              echo "::warning file=$f::Keine Auth-Pruefung gefunden"
+              warnings=$((warnings + 1))
+            fi
+          done
+          if [ $warnings -gt 0 ]; then
+            echo "::error::$warnings Datei(en) ohne Auth-Guard"
+            exit 1
+          fi
+          echo "Alle Auth-Checks bestanden"
+
+      - name: SQL Prepared Statements
+        run: |
+          echo "=== SQL Prepared Statements ==="
+          warnings=0
+          skip_dirs="${{ inputs.skip_dirs }}"
+
+          for f in $(git diff --name-only --diff-filter=ACM HEAD~1 HEAD -- '*.php' 2>/dev/null || find . -name '*.php' -not -path './vendor/*'); do
+            skip=false
+            for dir in $skip_dirs; do
+              if echo "$f" | grep -q "$dir"; then
+                skip=true
+                break
+              fi
+            done
+            if [ "$skip" = true ]; then continue; fi
+
+            if grep -qiE 'SELECT |INSERT |UPDATE |DELETE ' "$f" 2>/dev/null; then
+              if ! grep -qE 'prepare\(|bindParam|bindValue|execute\(' "$f" 2>/dev/null; then
+                echo "::warning file=$f::SQL ohne Prepared Statements"
+                warnings=$((warnings + 1))
+              fi
+            fi
+          done
+          if [ $warnings -gt 0 ]; then
+            echo "::error::$warnings Datei(en) mit unsicherem SQL"
+            exit 1
+          fi
+          echo "Alle SQL-Checks bestanden"
+
+      - name: Credentials Scan
+        run: |
+          echo "=== Credentials Scan ==="
+          warnings=0
+          skip_dirs="${{ inputs.skip_dirs }}"
+
+          for f in $(git diff --name-only --diff-filter=ACM HEAD~1 HEAD -- '*.php' 2>/dev/null || find . -name '*.php' -not -path './vendor/*'); do
+            skip=false
+            for dir in $skip_dirs; do
+              if echo "$f" | grep -q "$dir"; then
+                skip=true
+                break
+              fi
+            done
+            if [ "$skip" = true ]; then continue; fi
+
+            # Hartcodierte Passwoerter (min 8 Zeichen, ignoriert leere/Platzhalter)
+            if grep -nE "password\s*=\s*['\"][^'\"]{8,}" "$f" 2>/dev/null | grep -vE "(changeme|xxxxxxxx|password_hash|getenv|_ENV|_SERVER)" > /dev/null 2>&1; then
+              echo "::warning file=$f::Moeglicherweise hartcodiertes Passwort"
+              warnings=$((warnings + 1))
+            fi
+
+            # API-Keys, Secrets, Tokens
+            if grep -nE "(api_key|secret|token)\s*=\s*['\"][^'\"]{8,}" "$f" 2>/dev/null | grep -vE "(csrf_token|changeme|xxxxxxxx|getenv|_ENV|_SERVER|SESSION)" > /dev/null 2>&1; then
+              echo "::warning file=$f::Moeglicherweise hartcodierter API-Key/Secret/Token"
+              warnings=$((warnings + 1))
+            fi
+
+            # Private Keys
+            if grep -nE "-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY" "$f" > /dev/null 2>&1; then
+              echo "::warning file=$f::Private Key im Code"
+              warnings=$((warnings + 1))
+            fi
+          done
+          if [ $warnings -gt 0 ]; then
+            echo "::error::$warnings Datei(en) mit moeglicherweise hartcodierten Credentials"
+            exit 1
+          fi
+          echo "Credentials-Scan bestanden"
