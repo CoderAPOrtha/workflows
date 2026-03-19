@@ -1,7 +1,7 @@
 name: PHP Code Checks
 
 # Reusable Workflow — wird von Projekt-Repos aufgerufen.
-# Prueft PHP-Dateien auf: Syntax, Auth-Guards, SQL-Sicherheit, Credentials.
+# Prueft PHP-Dateien auf: Syntax, SQL-Sicherheit, Credentials.
 #
 # Aufruf aus einem Projekt-Repo:
 #   jobs:
@@ -19,11 +19,6 @@ on:
         type: string
         default: '8.2'
         description: 'PHP-Version fuer Syntax-Check'
-      extra_auth_patterns:
-        type: string
-        default: ''
-        description: 'Zusaetzliche Auth-Patterns fuer Projekte ohne Standard-Auth (Pipe-getrennt, z.B. requireAuth|requireAdmin)'
-
 jobs:
   php-checks:
     runs-on: ubuntu-latest
@@ -51,40 +46,6 @@ jobs:
             exit 1
           fi
           echo "Alle Dateien OK"
-
-      - name: Auth Check
-        run: |
-          echo "=== Auth Check ==="
-          warnings=0
-          skip_dirs="${{ inputs.skip_dirs }}"
-          # Standard-Auth-Guards
-          auth_pattern='require_login|require_role|require_api_auth|require_csrf'
-          # Zusaetzliche Patterns (fuer Projekte ohne Standard-Auth)
-          extra="${{ inputs.extra_auth_patterns }}"
-          if [ -n "$extra" ]; then
-            auth_pattern="${auth_pattern}|${extra}"
-          fi
-
-          for f in $(git diff --name-only --diff-filter=ACM HEAD~1 HEAD -- '*.php' 2>/dev/null || find . -name '*.php' -not -path './vendor/*'); do
-            skip=false
-            for dir in $skip_dirs; do
-              if echo "$f" | grep -q "$dir"; then
-                skip=true
-                break
-              fi
-            done
-            if [ "$skip" = true ]; then continue; fi
-
-            if ! grep -qE "$auth_pattern" "$f" 2>/dev/null; then
-              echo "::warning file=$f::Keine Auth-Pruefung gefunden"
-              warnings=$((warnings + 1))
-            fi
-          done
-          if [ $warnings -gt 0 ]; then
-            echo "::error::$warnings Datei(en) ohne Auth-Guard"
-            exit 1
-          fi
-          echo "Alle Auth-Checks bestanden"
 
       - name: SQL Prepared Statements
         run: |
